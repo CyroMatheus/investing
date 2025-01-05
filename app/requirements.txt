@@ -1,0 +1,7 @@
+django
+psycopg2-binary
+bs4
+lxml
+aiohttp
+requests
+pandas
