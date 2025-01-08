@@ -2,14 +2,32 @@ from bs4 import BeautifulSoup
 from lxml import html
 import asyncio, aiohttp, csv, time, re
 from datetime import datetime
-import pprint
+import threading, os
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-class Company():
-    def __init__(self):
+class CompanyBs4(threading.Thread):
+    def __init__(self, url, group):
+        threading.Thread.__init__(self)
+        self.daemon = True
+        self.stop_event = threading.Event()
         self.currentValue = '//div[@data-test="instrument-price-last"]'
         self.variantionValue = '//span[@data-test="instrument-price-change"]'
         self.variantionPercent = '//div[contains(@class, "flex") and contains(@class, "items-center")]/span[@data-test="instrument-price-change-percent"]'
         self.variationDaily = '//div[@class="text-xs/4 flex-1 mb-2.5"]/div[contains(@class, "flex") and contains(@class, "items-center")]/span'
+        self.url = url
+        self.group = group
+
+    def run(self): 
+            try:
+                asyncio.run(self.process(self.url))
+            except Exception as e:
+                print(f"Erro: {e}")
+                self.stop_thread()
+                self.selenium_thread = CompanySelenium(self.url, self.group)
+                self.selenium_thread.start()
 
     async def fetchPage(self, session, url):
         start_time = time.time()
@@ -18,11 +36,13 @@ class Company():
                 html_content = await response.text()
                 self.duration = time.time() - start_time
                 soup = BeautifulSoup(html_content, 'html.parser')
-                title = soup.title.string.strip() if soup.title else ""
                 document = html.fromstring(soup.prettify())
-                if title != 'Just a moment...':
-                    return document
-            await asyncio.sleep(1)
+                return document
+            else:
+                print(f"Erro: {response.status} - {url}")
+                self.stop_thread()
+                self.selenium_thread = CompanySelenium(url, self.group)
+                self.selenium_thread.start()
 
     async def getPage(self, url):
         async with aiohttp.ClientSession() as session:
@@ -57,16 +77,19 @@ class Company():
         await self.saveData(list(data.values()), list(data.keys()), company)
         
     async def saveData(self, data, headers, company):
+        if not os.path.exists(f"data/{self.group}"):
+            os.makedirs(f"data/{self.group}")
+
         mode = 'a'
         write_headers = False
 
         try:
-            with open(f"data/{company}.csv", 'r') as f:
+            with open(f"data/{self.group}/{company}.csv", 'r') as f:
                 pass
         except FileNotFoundError:
             write_headers = True
 
-        with open(f"data/{company}.csv", mode, newline='') as f:
+        with open(f"data/{self.group}/{company}.csv", mode, newline='') as f:
             writer = csv.writer(f)
             if write_headers and headers:
                 writer.writerow(headers)
@@ -78,21 +101,59 @@ class Company():
             lines = document.xpath('//tbody/tr[contains(@class, "datatable-v2")]')
             for key, line in enumerate(lines):
                 company = line.xpath('//td/div/a')[key].text_content().strip().replace('/', '-')
-                
                 line = line.text_content()
-                values = re.findall(r'[\d.,-]+', line)
+                values = [f"'{value}'".replace(",", ".") for value in re.findall(r'[+-]?[\d.,]+', line)]
                 await self.treatmentData(None, company, values)
             await asyncio.sleep(60) 
-    
+
+    def stop_thread(self):
+        self.stop_event.set()
+
+class CompanySelenium(threading.Thread):
+    def __init__(self, url, group):
+        threading.Thread.__init__(self)
+        options = webdriver.ChromeOptions()
+        # options.add_argument("--headless")
+        options.add_argument("--start-maximized")
+        self.chrome = webdriver.Chrome(options = options)
+        self.url = url
+        self.group = group
+
+    def run(self):
+        try:
+            self.chrome.get(self.url)
+            lineXpath = '//tbody/tr[contains(@class, "datatable-v2")]'
+            self.search_element(lineXpath)
+            elements = self.chrome.find_elements(By.XPATH, lineXpath)
+            for element in elements:
+                companyData = element.find_elements(By.XPATH, '//td[contains (@class, "datatable-v2_cell__IwP1U")]')
+                for data in companyData:
+                    print(data.text)
+        except Exception as e:
+            print(f"Erro: {e}")
+        finally:
+            self.chrome.quit()
+
+    def search_element(self, element):
+        while len(self.chrome.find_elements(By.XPATH, element)) == 0:
+            time.sleep(0.01)
+
 async def main():
     links = {
-        "indices": "https://br.investing.com/indices/major-indices"
+        # "indices": "https://br.investing.com/indices/major-indices",
+        # "commodities": "https://br.investing.com/commodities/real-time-futures",
+        "criptos": "https://br.investing.com/crypto/",
     }
     
     threads = list()
     for key, url in links.items():
-        company = Company()
-        await company.process(url)
+        # company = CompanyBs4(url, key)
+        company = CompanySelenium(url, key)
+        company.start()
+        threads.append(company)
+
+    for thread in threads:
+        thread.join()
 
 if __name__ == "__main__":
     asyncio.run(main())
