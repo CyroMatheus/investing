@@ -2,7 +2,7 @@ from bs4 import BeautifulSoup
 from lxml import html
 import asyncio, aiohttp, csv, time, re
 from datetime import datetime
-import threading, os
+import threading, os, pprint
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -21,13 +21,13 @@ class CompanyBs4(threading.Thread):
         self.group = group
 
     def run(self): 
-            try:
-                asyncio.run(self.process(self.url))
-            except Exception as e:
-                print(f"Erro: {e}")
-                self.stop_thread()
-                self.selenium_thread = CompanySelenium(self.url, self.group)
-                self.selenium_thread.start()
+        try:
+            asyncio.run(self.process(self.url))
+        except Exception as e:
+            print(f"Erro: {e}")
+            self.stop_thread()
+            self.selenium_thread = CompanySelenium(self.url, self.group)
+            self.selenium_thread.start()
 
     async def fetchPage(self, session, url):
         start_time = time.time()
@@ -123,17 +123,51 @@ class CompanySelenium(threading.Thread):
         try:
             self.chrome.get(self.url)
             lineXpath = '//tbody/tr[contains(@class, "datatable-v2")]'
-            self.search_element(lineXpath)
-            elements = self.chrome.find_elements(By.XPATH, lineXpath)
-            for element in elements:
-                companyData = element.find_elements(By.XPATH, '//td[contains (@class, "datatable-v2_cell__IwP1U")]')
-                for data in companyData:
-                    print(data.text)
+            elements = asyncio.run(self.getElements(lineXpath, True))
+            data = asyncio.run(self.treatmentData(elements))
+            pprint.pprint(data)
         except Exception as e:
             print(f"Erro: {e}")
         finally:
             self.chrome.quit()
 
+    async def treatmentData(self, elements):
+        print("Tratando data")
+        dataReturn = list()
+        for element in elements:
+            companyData = element.find_elements(By.XPATH, '//td[contains (@class, "datatable-v2_cell__IwP1U")]')
+            linha = []
+            for data in companyData:
+                texto = data.text.strip()
+                linha.append(texto if texto else None)
+            dataReturn.append(linha)
+        return dataReturn
+    
+    async def getElements(self, xpath, multiple=False):
+        self.search_element(xpath)
+        if multiple is True:
+            return self.chrome.find_elements(By.XPATH, xpath)
+        return self.chrome.find_element(By.XPATH, xpath)
+    
+    async def saveData(self, data, headers, company):
+        if not os.path.exists(f"data/{self.group}"):
+            os.makedirs(f"data/{self.group}")
+
+        mode = 'a'
+        write_headers = False
+
+        try:
+            with open(f"data/{self.group}/{company}.csv", 'r') as f:
+                pass
+        except FileNotFoundError:
+            write_headers = True
+
+        with open(f"data/{self.group}/{company}.csv", mode, newline='') as f:
+            writer = csv.writer(f)
+            if write_headers and headers:
+                writer.writerow(headers)
+            writer.writerow(data)
+    
     def search_element(self, element):
         while len(self.chrome.find_elements(By.XPATH, element)) == 0:
             time.sleep(0.01)

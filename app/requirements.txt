@@ -1,7 +1,13 @@
 django
 psycopg2-binary
+beautifulsoup4
 bs4
 lxml
 aiohttp
 requests
+asyncio
+numpy
 pandas
+datetime
+selenium
+webdriver-manager
